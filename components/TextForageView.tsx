@@ -23,6 +23,11 @@ import {
 import { useFocusEffect } from "expo-router";
 import { ErrorsContext } from "../utils/errors";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import {
+  backgroundJobManager,
+  JobType,
+  JobPriority,
+} from "../utils/backgroundJobQueue";
 import Animated, {
   useAnimatedKeyboard,
   useAnimatedStyle,
@@ -315,6 +320,62 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     setMedias(medias.filter((_, i) => i !== idx));
   }
 
+  const saveBlockImmediately = async (
+    content: string,
+    type: BlockType,
+    additionalData: Partial<BlockInsertInfo> = {}
+  ): Promise<string> => {
+    const blockData: BlockInsertInfo = {
+      createdBy: currentUser!.id,
+      content,
+      type,
+      collectionsToConnect: collectionId ? [{ collectionId }] : [],
+      ...additionalData,
+    };
+
+    const { blockId } = await createBlocks({
+      blocksToInsert: [blockData],
+    }).then((results) => results[0]);
+
+    return blockId;
+  };
+
+  const enrichBlockMetadata = async (
+    blockId: string,
+    content: string,
+    type: BlockType
+  ): Promise<void> => {
+    if (type === BlockType.Text && isUrl(content)) {
+      backgroundJobManager.addJob(
+        JobType.URL_ENRICHMENT,
+        JobPriority.HIGH,
+        { blockId, url: content },
+        3,
+        async (urlData) => {
+          if (urlData && (urlData.title || urlData.description || urlData.images?.length)) {
+            const updateInfo: BlockEditInfo = {
+              type: BlockType.Link,
+              title: urlData.title,
+              description: urlData.description,
+              source: urlData.url,
+            };
+
+            if (urlData.images?.length > 0) {
+              updateInfo.content = urlData.images[0];
+            } else if (urlData.favicon) {
+              updateInfo.content = urlData.favicon;
+            }
+
+            await updateBlock({ blockId, editInfo: updateInfo });
+          }
+        },
+        async (error) => {
+          console.warn(`Failed to enrich URL for block ${blockId}:`, error);
+        }
+      );
+    }
+  };
+
   async function onSaveResult() {
     if (!textValue && !medias.length) {
       return;
@@ -322,97 +383,77 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
     const savedMedias = medias;
     const savedTextValue = textValue;
+    
+    // Immediately clear UI
     setTextValue("");
     setMedias([]);
-    const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
+      const savePromises: Promise<string>[] = [];
+      
+      // Save media blocks immediately
       if (savedMedias.length) {
-        const mediaToInsert = await Promise.all(
-          savedMedias.map(
-            async ({
-              uri,
-              type,
-              assetId,
-              contentType,
-              captureTime,
-              locationData: mediaLocationData,
-            }) => {
-              const fileUri = await getFsPathForMediaResult(
-                uri,
-                type === BlockType.Image ? "jpg" : "mp4",
-                assetId
-              );
-              return {
-                createdBy: currentUser!.id,
-                content: fileUri,
-                type,
-                localAssetId: assetId || undefined,
-                contentType,
-                captureTime,
-                locationData: mediaLocationData || undefined,
-              };
-            }
-          )
-        );
-        blocksToInsert.push(...mediaToInsert);
+        const mediaPromises = savedMedias.map(async ({
+          uri,
+          type,
+          assetId,
+          contentType,
+          captureTime,
+          locationData: mediaLocationData,
+        }) => {
+          const fileUri = await getFsPathForMediaResult(
+            uri,
+            type === BlockType.Image ? "jpg" : "mp4",
+            assetId
+          );
+          
+          return saveBlockImmediately(fileUri, type, {
+            localAssetId: assetId || undefined,
+            contentType,
+            captureTime,
+            locationData: mediaLocationData || undefined,
+          });
+        });
+        savePromises.push(...mediaPromises);
       }
 
+      // Save text block immediately without location or URL processing
       if (savedTextValue) {
-        // Get location only when saving text (not for media)
-        const locationData = savedTextValue
-          ? await getLocationMetadata()
-          : null;
+        const textBlockPromise = saveBlockImmediately(savedTextValue, BlockType.Text);
+        savePromises.push(textBlockPromise);
+      }
 
-        // Save the text block immediately
-        const initialBlock = {
-          createdBy: currentUser!.id,
-          content: savedTextValue,
-          type: BlockType.Text,
-          collectionsToConnect: collectionId ? [{ collectionId }] : [],
-          locationData: locationData || undefined,
-        };
+      // Wait for all immediate saves to complete
+      const blockIds = await Promise.all(savePromises);
 
-        const { blockId } = await createBlocks({
-          blocksToInsert: [initialBlock],
-        }).then((results) => results[0]);
-
-        // After saving, enrich with metadata asynchronously
-        Promise.all([
-          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue) : null,
-        ])
-          .then(async ([urlData]) => {
-            if (!urlData) return;
-
-            const updateInfo: BlockEditInfo = {};
-            if (urlData) {
-              const { title, description, images, url, favicon } = urlData;
-              updateInfo.type = BlockType.Link;
-              updateInfo.content = images?.[0] || favicon || "";
-              updateInfo.title = title;
-              updateInfo.description = description;
-              updateInfo.source = url;
-            }
-
-            if (Object.keys(updateInfo).length > 0) {
-              await updateBlock({
-                blockId,
-                editInfo: updateInfo,
+      // Queue background enrichment for text blocks
+      if (savedTextValue && blockIds.length > 0) {
+        const textBlockId = blockIds[blockIds.length - 1]; // Text block is last
+        
+        // Add location enrichment job if location permission is available
+        getLocationMetadata()
+          .then((locationData) => {
+            if (locationData) {
+              updateBlock({
+                blockId: textBlockId,
+                editInfo: { locationData },
+              }).catch((err) => {
+                console.warn(`Failed to update location for block ${textBlockId}:`, err);
               });
             }
           })
           .catch((err) => {
-            // Log error but don't affect the user experience
-            console.warn("Error enriching block metadata:", err);
+            console.warn(`Failed to get location for block ${textBlockId}:`, err);
           });
-      }
 
-      await createBlocks({
-        blocksToInsert,
-        collectionId,
-      });
+        // Queue URL enrichment if the text contains a URL
+        await enrichBlockMetadata(textBlockId, savedTextValue, BlockType.Text);
+      }
     } catch (err) {
       logError(err);
+      // Re-populate form on error to prevent data loss
+      setTextValue(savedTextValue);
+      setMedias(savedMedias);
     }
   }
 
