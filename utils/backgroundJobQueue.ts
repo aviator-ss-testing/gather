@@ -220,8 +220,22 @@ class BackgroundJobManager {
   }
 
   private async processArenaSync(data: ArenaSyncJobData): Promise<void> {
-    // This will be implemented later in step 1.3
-    console.log("Arena sync job processed:", data);
+    // Import the sync functions from db context
+    // This will be properly implemented when we integrate with the existing sync system
+    const { syncWithArena } = await import("./db");
+    
+    try {
+      if (data.type === "pending") {
+        // Sync pending arena blocks
+        await syncWithArena();
+      } else if (data.type === "new") {
+        // Sync new arena blocks
+        await syncWithArena();
+      }
+    } catch (error) {
+      console.warn("Arena sync job failed:", error);
+      throw error;
+    }
   }
 
   private startProcessing(): void {
@@ -270,6 +284,111 @@ class BackgroundJobManager {
     allKeys.forEach((key) => {
       jobStorage.delete(key);
     });
+  }
+
+  // Additional methods for job status tracking and integration
+
+  getJobsByType(type: JobType): BackgroundJob[] {
+    return this.getAllJobs().filter((job) => job.type === type);
+  }
+
+  getJobsByStatus(status: JobStatus): BackgroundJob[] {
+    return this.getAllJobs().filter((job) => job.status === status);
+  }
+
+  cancelJob(jobId: string): boolean {
+    const job = this.getJob(jobId);
+    if (!job || job.status === JobStatus.PROCESSING) {
+      return false; // Cannot cancel processing jobs
+    }
+    
+    this.deleteJob(jobId);
+    return true;
+  }
+
+  // Integration helpers for existing sync system
+  
+  addUrlEnrichmentJob(
+    blockId: string, 
+    url: string, 
+    priority: JobPriority = JobPriority.HIGH,
+    onComplete?: (result: any) => Promise<void>
+  ): string {
+    return this.addJob(
+      JobType.URL_ENRICHMENT,
+      priority,
+      { blockId, url } as UrlEnrichmentJobData,
+      3,
+      onComplete
+    );
+  }
+
+  addLocationEnrichmentJob(
+    blockId: string,
+    latitude: number,
+    longitude: number,
+    priority: JobPriority = JobPriority.HIGH,
+    onComplete?: (result: any) => Promise<void>
+  ): string {
+    return this.addJob(
+      JobType.LOCATION_ENRICHMENT,
+      priority,
+      { blockId, latitude, longitude } as LocationEnrichmentJobData,
+      3,
+      onComplete
+    );
+  }
+
+  addArenaSyncJob(
+    syncType: "pending" | "new" = "pending",
+    priority: JobPriority = JobPriority.LOW
+  ): string {
+    // Check if there's already a pending Arena sync job to avoid duplicates
+    const existingJobs = this.getJobsByType(JobType.ARENA_SYNC);
+    const pendingArenaJobs = existingJobs.filter(
+      (job) => job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING
+    );
+    
+    if (pendingArenaJobs.length > 0) {
+      console.log("Arena sync job already pending, skipping duplicate");
+      return pendingArenaJobs[0].id;
+    }
+
+    return this.addJob(
+      JobType.ARENA_SYNC,
+      priority,
+      { type: syncType } as ArenaSyncJobData,
+      2 // Fewer retries for sync jobs
+    );
+  }
+
+  // Integration with debouncedTriggerBlockSync
+  triggerBlockSyncJob(): string {
+    return this.addArenaSyncJob("pending", JobPriority.MEDIUM);
+  }
+
+  // Status tracking for UI
+  getEnrichmentStatus(blockId: string): {
+    urlEnrichment?: JobStatus;
+    locationEnrichment?: JobStatus;
+    hasActiveJobs: boolean;
+  } {
+    const allJobs = this.getAllJobs();
+    const blockJobs = allJobs.filter((job) => 
+      (job.type === JobType.URL_ENRICHMENT && (job.data as UrlEnrichmentJobData).blockId === blockId) ||
+      (job.type === JobType.LOCATION_ENRICHMENT && (job.data as LocationEnrichmentJobData).blockId === blockId)
+    );
+
+    const urlJob = blockJobs.find((job) => job.type === JobType.URL_ENRICHMENT);
+    const locationJob = blockJobs.find((job) => job.type === JobType.LOCATION_ENRICHMENT);
+
+    return {
+      urlEnrichment: urlJob?.status,
+      locationEnrichment: locationJob?.status,
+      hasActiveJobs: blockJobs.some((job) => 
+        job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING
+      ),
+    };
   }
 }
 
