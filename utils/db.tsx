@@ -244,6 +244,15 @@ interface DatabaseContextProps {
   getExistingAssetIds: (
     assetIds: (string | null | undefined)[]
   ) => Promise<string[]>;
+
+  // submission priority management
+  // Tracks if any user submissions are currently active
+  isUserSubmissionActive: boolean;
+  // Call with true when starting submission, false when completing
+  // Automatically manages submission count and pauses Arena sync during submissions
+  setUserSubmissionActive: (active: boolean) => void;
+  // Current count of active submissions (for debugging/monitoring)
+  submissionCount: number;
 }
 
 export const DatabaseContext = createContext<DatabaseContextProps>({
@@ -312,6 +321,11 @@ export const DatabaseContext = createContext<DatabaseContextProps>({
   getExistingAssetIds: async () => {
     return [];
   },
+  
+  // submission priority management defaults
+  isUserSubmissionActive: false,
+  setUserSubmissionActive: () => {},
+  submissionCount: 0,
 });
 
 function camelCaseToSnakeCase(str: string) {
@@ -349,14 +363,56 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
     useStickyValue<string | null>(CollectionToReviewKey, null);
   const queuedBlocksToSync = useRef<Set<string>>(new Set<string>());
 
+  // Submission priority state
+  const [isUserSubmissionActive, setIsUserSubmissionActive] = useState(false);
+  const [submissionCount, setSubmissionCount] = useState(0);
+
   // Ref to keep track of whether the sync is already running
   const isSyncingRef = useRef(false);
+  // Ref to signal sync cancellation when user submissions start
+  const shouldCancelSyncRef = useRef(false);
   const { logError } = useContext(ErrorsContext);
   // Queue to store the triggers
   const triggerQueueRef = useRef<(() => void)[]>([]);
 
+  // Function to manage user submission state
+  const setUserSubmissionActive = (active: boolean) => {
+    if (active) {
+      setSubmissionCount(prev => prev + 1);
+      setIsUserSubmissionActive(true);
+      // Signal ongoing syncs to cancel for user submission priority
+      shouldCancelSyncRef.current = true;
+    } else {
+      setSubmissionCount(prev => {
+        const newCount = Math.max(0, prev - 1);
+        const wasActive = isUserSubmissionActive;
+        setIsUserSubmissionActive(newCount > 0);
+        
+        // Reset cancellation flag when no more active submissions
+        if (newCount === 0) {
+          shouldCancelSyncRef.current = false;
+        }
+        
+        // If submissions just finished, trigger background sync resume
+        if (wasActive && newCount === 0) {
+          // Resume background sync after a short delay to allow UI updates
+          setTimeout(() => {
+            triggerBlockSync();
+          }, 1000);
+        }
+        
+        return newCount;
+      });
+    }
+  };
+
   // Function to trigger the sync
   const triggerBlockSync = () => {
+    // Don't start sync if user submission is active
+    if (isUserSubmissionActive) {
+      return;
+    }
+
     const syncFunction = async () => {
       isSyncingRef.current = true;
       try {
@@ -1712,6 +1768,11 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
   }
 
   async function syncWithArena() {
+    // Don't sync if user submission is active
+    if (isUserSubmissionActive) {
+      return;
+    }
+
     try {
       await debouncedTriggerBlockSync();
       const { lastSyncedAt } = await getLastSyncedRemoteInfo();
@@ -1738,6 +1799,11 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
       return;
     }
 
+    // return early if user submission is active
+    if (isUserSubmissionActive) {
+      return;
+    }
+
     InteractionManager.runAfterInteractions(async () => {
       try {
         const result = await getArenaCollections();
@@ -1745,8 +1811,16 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
           ...mapDbCollectionToCollection(collection),
         }));
         for (const collectionToSync of collectionsToSync) {
+          // Check for user submission priority cancellation before each collection sync
+          if (shouldCancelSyncRef.current || isUserSubmissionActive) {
+            break;
+          }
+          
           InteractionManager.runAfterInteractions(async () => {
-            await syncNewRemoteItemsForCollection(collectionToSync);
+            // Double-check before starting the actual sync operation
+            if (!shouldCancelSyncRef.current && !isUserSubmissionActive) {
+              await syncNewRemoteItemsForCollection(collectionToSync);
+            }
           });
         }
       } finally {
@@ -1765,10 +1839,20 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
       return;
     }
 
+    // return early if user submission is active
+    if (isUserSubmissionActive) {
+      return;
+    }
+
     InteractionManager.runAfterInteractions(async () => {
       const result = await getPendingArenaConnections();
 
       if (!result.rows.length) {
+        return;
+      }
+
+      // Check for user submission priority cancellation
+      if (shouldCancelSyncRef.current || isUserSubmissionActive) {
         return;
       }
 
@@ -1805,6 +1889,11 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
         const succesfullySyncedConnections = [];
 
         for (const connToSync of connectionsToSync) {
+          // Check for user submission priority cancellation before each sync
+          if (shouldCancelSyncRef.current || isUserSubmissionActive) {
+            break;
+          }
+          
           console.log("syncing", connToSync);
           const { collectionRemoteSourceInfos, collectionIds } = connToSync;
           const arenaCollectionInfo = collectionRemoteSourceInfos.map(
@@ -2377,6 +2466,11 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
         trySyncPendingArenaBlocks,
         getPendingArenaBlocks: getPendingArenaConnections,
         trySyncNewArenaBlocks,
+        
+        // submission priority management
+        isUserSubmissionActive,
+        setUserSubmissionActive,
+        submissionCount,
       }}
     >
       {children}
