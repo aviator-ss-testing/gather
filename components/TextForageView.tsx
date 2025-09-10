@@ -2,8 +2,8 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Audio } from "expo-av";
 import { Recording } from "expo-av/build/Audio";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Alert, Dimensions, Linking, Platform, ScrollView } from "react-native";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AppState, Dimensions, Linking, Platform, ScrollView } from "react-native";
 import { Spinner, XStack, YStack } from "tamagui";
 import { getFsPathForMediaResult } from "../utils/blobs";
 import { BlockSelectLimit, DatabaseContext } from "../utils/db";
@@ -165,6 +165,12 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   const [textValue, setTextValue] = useState("");
   const [medias, setMedias] = useState<PickedMedia[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingSubmission, setPendingSubmission] = useState<{
+    textValue: string;
+    medias: PickedMedia[];
+  } | null>(null);
+  const appStateRef = useRef(AppState.currentState);
   const {
     createBlocks,
     shareIntent,
@@ -315,15 +321,49 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     setMedias(medias.filter((_, i) => i !== idx));
   }
 
+  // Recovery function for interrupted submissions
+  const recoverInterruptedSubmission = useCallback(async () => {
+    if (!pendingSubmission) {
+      return;
+    }
+
+    console.log('Attempting to recover interrupted submission');
+    
+    try {
+      // Restore form data
+      setTextValue(pendingSubmission.textValue);
+      setMedias(pendingSubmission.medias);
+      
+      // Clear pending state
+      setPendingSubmission(null);
+      setIsSubmitting(false);
+      
+      // Optionally show user notification about recovery
+      console.log('Submission data restored after app resume');
+    } catch (error) {
+      console.error('Error recovering interrupted submission:', error);
+      logError(error);
+      
+      // Clear states on recovery failure
+      setPendingSubmission(null);
+      setIsSubmitting(false);
+    }
+  }, [pendingSubmission, logError]);
+
   async function onSaveResult() {
     if (!textValue && !medias.length) {
       return;
     }
 
+    // Set submission flag and preserve state for app backgrounding
+    setIsSubmitting(true);
     const savedMedias = medias;
     const savedTextValue = textValue;
+    
+    // Clear form immediately for optimistic UI
     setTextValue("");
     setMedias([]);
+    
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
@@ -411,8 +451,18 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         blocksToInsert,
         collectionId,
       });
+
+      // Clear submission state on success
+      setIsSubmitting(false);
+      setPendingSubmission(null);
     } catch (err) {
       logError(err);
+      
+      // Rollback form state on error
+      setTextValue(savedTextValue);
+      setMedias(savedMedias);
+      setIsSubmitting(false);
+      setPendingSubmission(null);
     }
   }
 
@@ -517,6 +567,48 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   useEffect(() => {
     void checkExistingMedias().then(setExistingMedias);
   }, [medias]);
+
+  // AppState change listener for handling backgrounding during submissions
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      console.log('App state changing from', appStateRef.current, 'to', nextAppState);
+      
+      // If app is going to background and we're in the middle of a submission
+      if (appStateRef.current.match(/active|foreground/) && 
+          nextAppState === 'background' && 
+          isSubmitting) {
+        console.log('App backgrounded during submission, preserving state');
+        setPendingSubmission({
+          textValue,
+          medias,
+        });
+      }
+      
+      // If app is coming back to foreground, check for pending submissions
+      if (appStateRef.current === 'background' && 
+          nextAppState === 'active' && 
+          pendingSubmission) {
+        console.log('App resumed with pending submission, attempting recovery');
+        // Use recovery function to handle interrupted submissions
+        setTimeout(() => {
+          recoverInterruptedSubmission();
+        }, 100); // Small delay to ensure app is fully active
+      }
+      
+      appStateRef.current = nextAppState;
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription?.remove();
+  }, [isSubmitting, textValue, medias, pendingSubmission, recoverInterruptedSubmission]);
+
+  // Recovery check on component mount
+  useEffect(() => {
+    if (pendingSubmission && !isSubmitting) {
+      console.log('Found pending submission on mount, attempting recovery');
+      recoverInterruptedSubmission();
+    }
+  }, []);
 
   if (!currentUser) {
     return null;
