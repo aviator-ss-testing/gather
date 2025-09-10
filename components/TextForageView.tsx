@@ -327,6 +327,60 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
+      // Handle text blocks first - save immediately without metadata
+      if (savedTextValue) {
+        // Save the text block immediately without waiting for metadata
+        const initialBlock = {
+          createdBy: currentUser!.id,
+          content: savedTextValue,
+          type: BlockType.Text,
+          collectionsToConnect: collectionId ? [{ collectionId }] : [],
+        };
+
+        const { blockId } = await createBlocks({
+          blocksToInsert: [initialBlock],
+        }).then((results) => results[0]);
+
+        // After local save, enrich with metadata asynchronously
+        Promise.all([
+          getLocationMetadata().catch((err) => {
+            console.warn("Error getting location metadata:", err);
+            return null;
+          }),
+          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue).catch((err) => {
+            console.warn("Error extracting URL data:", err);
+            return null;
+          }) : Promise.resolve(null),
+        ])
+          .then(async ([locationData, urlData]) => {
+            const updateInfo: BlockEditInfo = {};
+            
+            if (locationData) {
+              updateInfo.locationData = locationData;
+            }
+            
+            if (urlData) {
+              const { title, description, images, url, favicon } = urlData;
+              updateInfo.type = BlockType.Link;
+              updateInfo.content = images?.[0] || favicon || "";
+              updateInfo.title = title;
+              updateInfo.description = description;
+              updateInfo.source = url;
+            }
+
+            if (Object.keys(updateInfo).length > 0) {
+              await updateBlock({
+                blockId,
+                editInfo: updateInfo,
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn("Error enriching block metadata:", err);
+          });
+      }
+
+      // Handle media blocks
       if (savedMedias.length) {
         const mediaToInsert = await Promise.all(
           savedMedias.map(
@@ -356,55 +410,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           )
         );
         blocksToInsert.push(...mediaToInsert);
-      }
-
-      if (savedTextValue) {
-        // Get location only when saving text (not for media)
-        const locationData = savedTextValue
-          ? await getLocationMetadata()
-          : null;
-
-        // Save the text block immediately
-        const initialBlock = {
-          createdBy: currentUser!.id,
-          content: savedTextValue,
-          type: BlockType.Text,
-          collectionsToConnect: collectionId ? [{ collectionId }] : [],
-          locationData: locationData || undefined,
-        };
-
-        const { blockId } = await createBlocks({
-          blocksToInsert: [initialBlock],
-        }).then((results) => results[0]);
-
-        // After saving, enrich with metadata asynchronously
-        Promise.all([
-          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue) : null,
-        ])
-          .then(async ([urlData]) => {
-            if (!urlData) return;
-
-            const updateInfo: BlockEditInfo = {};
-            if (urlData) {
-              const { title, description, images, url, favicon } = urlData;
-              updateInfo.type = BlockType.Link;
-              updateInfo.content = images?.[0] || favicon || "";
-              updateInfo.title = title;
-              updateInfo.description = description;
-              updateInfo.source = url;
-            }
-
-            if (Object.keys(updateInfo).length > 0) {
-              await updateBlock({
-                blockId,
-                editInfo: updateInfo,
-              });
-            }
-          })
-          .catch((err) => {
-            // Log error but don't affect the user experience
-            console.warn("Error enriching block metadata:", err);
-          });
       }
 
       await createBlocks({
