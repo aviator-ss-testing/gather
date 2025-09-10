@@ -126,20 +126,37 @@ const processMediaAsset = async (
       GPSLongitudeRef,
       DateTimeOriginal,
     } = asset.exif;
+    
+    // Process capture time immediately (lightweight operation)
+    const captureTime = parseExifDate(DateTimeOriginal);
+    
+    // Only process location if GPS coordinates exist, but do it asynchronously
     let locationMetadata;
     if (GPSLatitude && GPSLongitude) {
-      // Apply negative values for South and West references
-      const latitude = GPSLatitudeRef === "S" ? -GPSLatitude : GPSLatitude;
-      const longitude = GPSLongitudeRef === "W" ? -GPSLongitude : GPSLongitude;
-      locationMetadata = await getLocationMetadata(latitude, longitude);
+      try {
+        // Apply negative values for South and West references
+        const latitude = GPSLatitudeRef === "S" ? -GPSLatitude : GPSLatitude;
+        const longitude = GPSLongitudeRef === "W" ? -GPSLongitude : GPSLongitude;
+        
+        // Add timeout for location metadata to prevent hanging
+        locationMetadata = await Promise.race([
+          getLocationMetadata(latitude, longitude),
+          new Promise<LocationMetadata>((_, reject) => 
+            setTimeout(() => reject(new Error('Location metadata timeout')), 5000)
+          )
+        ]);
+      } catch (err) {
+        console.warn("Error processing location metadata for media:", err);
+        // Fallback to basic location data without reverse geocoding
+        const latitude = GPSLatitudeRef === "S" ? -GPSLatitude : GPSLatitude;
+        const longitude = GPSLongitudeRef === "W" ? -GPSLongitude : GPSLongitude;
+        locationMetadata = { latitude, longitude };
+      }
     }
 
     metadata = {
-      captureTime: parseExifDate(DateTimeOriginal),
+      captureTime,
       locationData: locationMetadata,
-    } as {
-      captureTime: number;
-      locationData: LocationMetadata;
     };
   }
 
@@ -315,6 +332,48 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     setMedias(medias.filter((_, i) => i !== idx));
   }
 
+  async function enrichBlockMetadata(
+    blockId: string,
+    textContent: string
+  ): Promise<void> {
+    try {
+      const promises: Promise<any>[] = [];
+      
+      // Add URL metadata extraction with timeout
+      if (isUrl(textContent)) {
+        promises.push(
+          Promise.race([
+            extractDataFromUrl(textContent),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('URL extraction timeout')), 10000)
+            )
+          ])
+        );
+      }
+      
+      const results = await Promise.allSettled(promises);
+      const urlData = results[0]?.status === 'fulfilled' ? results[0].value : null;
+      
+      if (urlData) {
+        const { title, description, images, url, favicon } = urlData;
+        const updateInfo: BlockEditInfo = {
+          type: BlockType.Link,
+          content: images?.[0] || favicon || "",
+          title,
+          description,
+          source: url,
+        };
+        
+        await updateBlock({
+          blockId,
+          editInfo: updateInfo,
+        });
+      }
+    } catch (err) {
+      console.warn("Error enriching block metadata:", err);
+    }
+  }
+
   async function onSaveResult() {
     if (!textValue && !medias.length) {
       return;
@@ -322,12 +381,50 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
     const savedMedias = medias;
     const savedTextValue = textValue;
+    
+    // Clear UI immediately for better UX
     setTextValue("");
     setMedias([]);
-    const blocksToInsert: BlockInsertInfo[] = [];
-
+    
     try {
+      // Handle text blocks with immediate save
+      if (savedTextValue) {
+        // Create initial text block with minimal data for immediate save
+        const initialBlock = {
+          createdBy: currentUser!.id,
+          content: savedTextValue,
+          type: BlockType.Text,
+          collectionsToConnect: collectionId ? [{ collectionId }] : [],
+        };
+
+        const { blockId } = await createBlocks({
+          blocksToInsert: [initialBlock],
+        }).then((results) => results[0]);
+
+        // Enrich with metadata asynchronously without blocking
+        enrichBlockMetadata(blockId, savedTextValue).catch((err) => {
+          console.warn("Background metadata enrichment failed:", err);
+        });
+        
+        // Get location metadata asynchronously and update block
+        getLocationMetadata()
+          .then(async (locationData) => {
+            if (locationData) {
+              await updateBlock({
+                blockId,
+                editInfo: { locationData },
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn("Error updating location metadata:", err);
+          });
+      }
+
+      // Handle media blocks (process synchronously as they need file operations)
       if (savedMedias.length) {
+        const blocksToInsert: BlockInsertInfo[] = [];
+        
         const mediaToInsert = await Promise.all(
           savedMedias.map(
             async ({
@@ -356,63 +453,17 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           )
         );
         blocksToInsert.push(...mediaToInsert);
+        
+        await createBlocks({
+          blocksToInsert,
+          collectionId,
+        });
       }
-
-      if (savedTextValue) {
-        // Get location only when saving text (not for media)
-        const locationData = savedTextValue
-          ? await getLocationMetadata()
-          : null;
-
-        // Save the text block immediately
-        const initialBlock = {
-          createdBy: currentUser!.id,
-          content: savedTextValue,
-          type: BlockType.Text,
-          collectionsToConnect: collectionId ? [{ collectionId }] : [],
-          locationData: locationData || undefined,
-        };
-
-        const { blockId } = await createBlocks({
-          blocksToInsert: [initialBlock],
-        }).then((results) => results[0]);
-
-        // After saving, enrich with metadata asynchronously
-        Promise.all([
-          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue) : null,
-        ])
-          .then(async ([urlData]) => {
-            if (!urlData) return;
-
-            const updateInfo: BlockEditInfo = {};
-            if (urlData) {
-              const { title, description, images, url, favicon } = urlData;
-              updateInfo.type = BlockType.Link;
-              updateInfo.content = images?.[0] || favicon || "";
-              updateInfo.title = title;
-              updateInfo.description = description;
-              updateInfo.source = url;
-            }
-
-            if (Object.keys(updateInfo).length > 0) {
-              await updateBlock({
-                blockId,
-                editInfo: updateInfo,
-              });
-            }
-          })
-          .catch((err) => {
-            // Log error but don't affect the user experience
-            console.warn("Error enriching block metadata:", err);
-          });
-      }
-
-      await createBlocks({
-        blocksToInsert,
-        collectionId,
-      });
     } catch (err) {
       logError(err);
+      // Re-populate form on error for user to retry
+      setTextValue(savedTextValue);
+      setMedias(savedMedias);
     }
   }
 
