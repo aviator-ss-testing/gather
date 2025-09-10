@@ -2,8 +2,8 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Audio } from "expo-av";
 import { Recording } from "expo-av/build/Audio";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Alert, Dimensions, Linking, Platform, ScrollView } from "react-native";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AppState, Dimensions, Linking, Platform, ScrollView } from "react-native";
 import { Spinner, XStack, YStack } from "tamagui";
 import { getFsPathForMediaResult } from "../utils/blobs";
 import { BlockSelectLimit, DatabaseContext } from "../utils/db";
@@ -165,6 +165,12 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   const [textValue, setTextValue] = useState("");
   const [medias, setMedias] = useState<PickedMedia[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [isSubmissionActive, setIsSubmissionActive] = useState(false);
+  const [pendingSubmissionData, setPendingSubmissionData] = useState<{
+    textValue: string;
+    medias: PickedMedia[];
+  } | null>(null);
+  const appStateRef = useRef(AppState.currentState);
   const {
     createBlocks,
     shareIntent,
@@ -239,6 +245,53 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       );
     });
   }, []);
+
+  // Memoize the recovery function to avoid useEffect dependency issues
+  const recoverFromInterruptedSubmission = useCallback(() => {
+    if (pendingSubmissionData) {
+      // Restore form state and retry submission
+      setTextValue(pendingSubmissionData.textValue);
+      setMedias(pendingSubmissionData.medias);
+      setPendingSubmissionData(null);
+      
+      // Retry the submission automatically after a brief delay
+      setTimeout(() => {
+        if (pendingSubmissionData.textValue || pendingSubmissionData.medias.length > 0) {
+          // Manually trigger submission with the recovered data
+          setIsSubmissionActive(true);
+        }
+      }, 100);
+    }
+  }, [pendingSubmissionData]);
+
+  // AppState change listener for handling backgrounding during submissions
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      const prevAppState = appStateRef.current;
+      appStateRef.current = nextAppState;
+
+      // If app goes to background during active submission, save the data
+      if (prevAppState === 'active' && nextAppState.match(/inactive|background/)) {
+        if (isSubmissionActive && (textValue || medias.length > 0)) {
+          setPendingSubmissionData({
+            textValue,
+            medias: [...medias]
+          });
+        }
+      }
+
+      // If app comes back to foreground, check for interrupted submissions
+      if (prevAppState.match(/inactive|background/) && nextAppState === 'active') {
+        recoverFromInterruptedSubmission();
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [isSubmissionActive, textValue, medias, recoverFromInterruptedSubmission]);
 
   useFocusEffect(updatePlaceholder);
 
@@ -320,10 +373,16 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       return;
     }
 
+    // Set submission as active to track through app state changes
+    setIsSubmissionActive(true);
+
     const savedMedias = medias;
     const savedTextValue = textValue;
+    
+    // Clear form inputs for optimistic UI
     setTextValue("");
     setMedias([]);
+    
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
@@ -411,8 +470,27 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         blocksToInsert,
         collectionId,
       });
+
+      // Clear submission flag on successful completion
+      setIsSubmissionActive(false);
+      setPendingSubmissionData(null);
     } catch (err) {
       logError(err);
+      
+      // On error, restore form state if not backgrounded
+      if (appStateRef.current === 'active') {
+        setTextValue(savedTextValue);
+        setMedias(savedMedias);
+      } else {
+        // If backgrounded, save for recovery on resume
+        setPendingSubmissionData({
+          textValue: savedTextValue,
+          medias: savedMedias
+        });
+      }
+      
+      // Clear submission flag
+      setIsSubmissionActive(false);
     }
   }
 
