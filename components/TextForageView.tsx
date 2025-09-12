@@ -316,17 +316,20 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   }
 
   async function onSaveResult() {
+    // Input validation
     if (!textValue && !medias.length) {
       return;
     }
 
     const savedMedias = medias;
     const savedTextValue = textValue;
-    setTextValue("");
-    setMedias([]);
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
+      // Immediate local database saves after validation
+      let textBlockId: string | undefined;
+      let mediaBlockIds: string[] = [];
+
       if (savedTextValue) {
         // Save the text block immediately without waiting for metadata
         const initialBlock = {
@@ -339,8 +342,61 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         const { blockId } = await createBlocks({
           blocksToInsert: [initialBlock],
         }).then((results) => results[0]);
+        textBlockId = blockId;
+      }
 
-        // After local save, enrich with metadata asynchronously
+      // Handle media blocks - save immediately
+      if (savedMedias.length) {
+        const basicMediaBlocks = savedMedias.map(({
+          uri,
+          type,
+          assetId,
+          contentType,
+          captureTime,
+          locationData: mediaLocationData,
+        }) => ({
+          createdBy: currentUser!.id,
+          content: uri, // Use original URI temporarily
+          type,
+          localAssetId: assetId || undefined,
+          contentType,
+          captureTime,
+          locationData: mediaLocationData || undefined,
+          collectionsToConnect: collectionId ? [{ collectionId }] : [],
+        }));
+
+        const createdBlocks = await createBlocks({
+          blocksToInsert: basicMediaBlocks,
+        });
+        mediaBlockIds = createdBlocks.map(block => block.blockId);
+        
+        // Process file paths asynchronously and update blocks
+        savedMedias.forEach(async ({ uri, type, assetId }, index) => {
+          try {
+            const fileUri = await getFsPathForMediaResult(
+              uri,
+              type === BlockType.Image ? "jpg" : "mp4",
+              assetId
+            );
+            
+            await updateBlock({
+              blockId: createdBlocks[index].blockId,
+              editInfo: {
+                content: fileUri,
+              },
+            });
+          } catch (err) {
+            console.warn("Error processing media file path:", err);
+          }
+        });
+      }
+
+      // Clear UI after successful local saves
+      setTextValue("");
+      setMedias([]);
+
+      // Process metadata asynchronously after local saves and UI clearing
+      if (textBlockId) {
         Promise.all([
           getLocationMetadata().catch((err) => {
             console.warn("Error getting location metadata:", err);
@@ -369,7 +425,7 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
             if (Object.keys(updateInfo).length > 0) {
               await updateBlock({
-                blockId,
+                blockId: textBlockId,
                 editInfo: updateInfo,
               });
             }
@@ -377,54 +433,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           .catch((err) => {
             console.warn("Error enriching block metadata:", err);
           });
-      }
-
-      // Handle media blocks - save immediately then process paths
-      if (savedMedias.length) {
-        // First, create basic media blocks with temporary content
-        const basicMediaBlocks = savedMedias.map(({
-          uri,
-          type,
-          assetId,
-          contentType,
-          captureTime,
-          locationData: mediaLocationData,
-        }) => ({
-          createdBy: currentUser!.id,
-          content: uri, // Use original URI temporarily
-          type,
-          localAssetId: assetId || undefined,
-          contentType,
-          captureTime,
-          locationData: mediaLocationData || undefined,
-          collectionsToConnect: collectionId ? [{ collectionId }] : [],
-        }));
-
-        // Save basic blocks immediately
-        const createdBlocks = await createBlocks({
-          blocksToInsert: basicMediaBlocks,
-        });
-
-        // Process file paths asynchronously and update blocks
-        savedMedias.forEach(async ({ uri, type, assetId }, index) => {
-          try {
-            const fileUri = await getFsPathForMediaResult(
-              uri,
-              type === BlockType.Image ? "jpg" : "mp4",
-              assetId
-            );
-            
-            // Update the block with the processed file path
-            await updateBlock({
-              blockId: createdBlocks[index].blockId,
-              editInfo: {
-                content: fileUri,
-              },
-            });
-          } catch (err) {
-            console.warn("Error processing media file path:", err);
-          }
-        });
       }
     } catch (err) {
       logError(err);
