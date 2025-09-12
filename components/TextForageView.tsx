@@ -316,7 +316,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   }
 
   async function onSaveResult() {
-    // Input validation
     if (!textValue && !medias.length) {
       return;
     }
