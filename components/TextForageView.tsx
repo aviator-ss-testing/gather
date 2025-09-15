@@ -320,39 +320,65 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // Recovery function for interrupted submissions
   const recoverInterruptedSubmission = useCallback(async () => {
     if (!pendingSubmission) {
+      console.log('[TextForageView] No pending submission to recover');
       return;
     }
+
+    console.log('[TextForageView] Starting submission recovery', {
+      textLength: pendingSubmission.textValue.length,
+      mediaCount: pendingSubmission.medias.length,
+      currentAppState: appStateRef.current
+    });
 
     try {
       // Restore form data
       setTextValue(pendingSubmission.textValue);
       setMedias(pendingSubmission.medias);
 
+      console.log('[TextForageView] Successfully restored form data from pending submission');
+
       // Clear pending state
       setPendingSubmission(null);
       setIsSubmitting(false);
+
+      console.log('[TextForageView] Cleared pending submission state');
     } catch (error) {
+      console.error('[TextForageView] Failed to recover interrupted submission:', error);
       logError(error);
 
       // Clear states on recovery failure
       setPendingSubmission(null);
       setIsSubmitting(false);
+
+      console.log('[TextForageView] Cleared states after recovery failure');
     }
   }, [pendingSubmission, logError]);
 
   async function onSaveResult() {
     if (!textValue && !medias.length) {
+      console.log('[TextForageView] No content to save, aborting submission');
       return;
     }
+
+    console.log('[TextForageView] Starting submission', {
+      textLength: textValue.length,
+      mediaCount: medias.length,
+      currentAppState: appStateRef.current,
+      isCurrentlySubmitting: isSubmitting
+    });
 
     // Set submission flag and preserve state for app backgrounding
     setIsSubmitting(true);
     const savedMedias = medias;
     const savedTextValue = textValue;
-    
+
+    console.log('[TextForageView] Set submission flag and saved form data for recovery');
+
     // Clear form immediately for optimistic UI
     setTextValue("");
     setMedias([]);
+
+    console.log('[TextForageView] Cleared form for optimistic UI');
     
     const blocksToInsert: BlockInsertInfo[] = [];
 
@@ -444,14 +470,19 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       // Clear submission state on success
       setIsSubmitting(false);
       setPendingSubmission(null);
+
+      console.log('[TextForageView] Submission completed successfully');
     } catch (err) {
+      console.error('[TextForageView] Submission failed:', err);
       logError(err);
-      
+
       // Rollback form state on error
       setTextValue(savedTextValue);
       setMedias(savedMedias);
       setIsSubmitting(false);
       setPendingSubmission(null);
+
+      console.log('[TextForageView] Rolled back form state after submission error');
     }
   }
 
@@ -556,10 +587,22 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
+      console.log('[TextForageView] App state changing', {
+        from: appStateRef.current,
+        to: nextAppState,
+        isSubmitting,
+        hasPendingSubmission: !!pendingSubmission
+      });
+
       // If app is going to background and we're in the middle of a submission
       if (appStateRef.current.match(/active|foreground/) &&
           nextAppState === 'background' &&
           isSubmitting) {
+        console.log('[TextForageView] App backgrounding during submission, saving pending state', {
+          textLength: textValue.length,
+          mediaCount: medias.length
+        });
+
         setPendingSubmission({
           textValue,
           medias,
@@ -570,6 +613,8 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       if (appStateRef.current === 'background' &&
           nextAppState === 'active' &&
           pendingSubmission) {
+        console.log('[TextForageView] App returning to foreground with pending submission, scheduling recovery');
+
         // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
@@ -577,18 +622,49 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       }
 
       appStateRef.current = nextAppState;
+      console.log('[TextForageView] App state updated to:', nextAppState);
     };
 
+    console.log('[TextForageView] Setting up AppState listener');
     const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription?.remove();
+    return () => {
+      console.log('[TextForageView] Cleaning up AppState listener');
+      subscription?.remove();
+    };
   }, [isSubmitting, textValue, medias, pendingSubmission, recoverInterruptedSubmission]);
 
   // Recovery check on component mount
   useEffect(() => {
+    console.log('[TextForageView] Component mounted, checking for pending submissions', {
+      hasPendingSubmission: !!pendingSubmission,
+      isSubmitting,
+      currentAppState: appStateRef.current
+    });
+
     if (pendingSubmission && !isSubmitting) {
+      console.log('[TextForageView] Found pending submission on mount, initiating recovery');
       recoverInterruptedSubmission();
     }
   }, []);
+
+  // Log state changes for debugging
+  useEffect(() => {
+    console.log('[TextForageView] Submission state changed:', {
+      isSubmitting,
+      currentAppState: appStateRef.current,
+      timestamp: new Date().toISOString()
+    });
+  }, [isSubmitting]);
+
+  useEffect(() => {
+    console.log('[TextForageView] Pending submission state changed:', {
+      hasPendingSubmission: !!pendingSubmission,
+      pendingTextLength: pendingSubmission?.textValue.length,
+      pendingMediaCount: pendingSubmission?.medias.length,
+      currentAppState: appStateRef.current,
+      timestamp: new Date().toISOString()
+    });
+  }, [pendingSubmission]);
 
   if (!currentUser) {
     return null;
