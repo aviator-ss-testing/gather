@@ -84,7 +84,6 @@ const getLocationMetadata = async (
       country: location.country || undefined,
     };
   } catch (error) {
-    console.warn("Error getting location metadata:", error);
     return { latitude, longitude };
   }
 };
@@ -103,7 +102,6 @@ const getCurrentLocationMetadata = async (): Promise<
 
     return await getLocationMetadata(latitude, longitude);
   } catch (error) {
-    console.warn("Error getting current location:", error);
     return undefined;
   }
 };
@@ -218,7 +216,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   const fetchPlaceholders = useCallback(async () => {
     const promptCollection = getAppSetting(AppSettingType.PromptsCollection);
     if (promptCollection) {
-      console.log("promptCollection", promptCollection);
       const collectionItems = await getCollectionItems(promptCollection, {
         page: 0,
         whereClause: `type = '${BlockType.Text}'`,
@@ -229,7 +226,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           ? item.content.slice(0, MaxPlaceholderLength) + "..."
           : item.content
       );
-      console.log("collectionItemsText", collectionItemsText);
       if (collectionItemsText.length) {
         return collectionItemsText;
       }
@@ -437,7 +433,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           })
           .catch((err) => {
             // Log error but don't affect the user experience
-            console.warn("Error enriching block metadata:", err);
           });
       }
 
@@ -463,26 +458,22 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // TODO: fix this to actually pick up the sound
   async function startRecording() {
     try {
-      console.log("Requesting permissions..");
       await Audio.requestPermissionsAsync();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      console.log("Starting recording..");
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(recording);
-      console.log("Recording started");
     } catch (err) {
       logError("Failed to start recording");
     }
   }
 
   async function stopRecording() {
-    console.log("Stopping recording..");
     if (!recording) {
       return;
     }
@@ -565,13 +556,10 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
-      console.log(`[TextForageView] AppState change: ${appStateRef.current} -> ${nextAppState}, isSubmitting: ${isSubmitting}, hasPendingSubmission: ${!!pendingSubmission}`);
-
       // If app is going to background and we're in the middle of a submission
       if (appStateRef.current.match(/active|foreground/) &&
           nextAppState === 'background' &&
           isSubmitting) {
-        console.log('[TextForageView] App backgrounding during submission, saving pending state');
         setPendingSubmission({
           textValue,
           medias,
@@ -582,7 +570,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       if (appStateRef.current === 'background' &&
           nextAppState === 'active' &&
           pendingSubmission) {
-        console.log('[TextForageView] App returning to foreground with pending submission, starting recovery');
         // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
