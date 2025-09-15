@@ -327,23 +327,17 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       return;
     }
 
-    console.log('Attempting to recover interrupted submission');
-    
     try {
       // Restore form data
       setTextValue(pendingSubmission.textValue);
       setMedias(pendingSubmission.medias);
-      
+
       // Clear pending state
       setPendingSubmission(null);
       setIsSubmitting(false);
-      
-      // Optionally show user notification about recovery
-      console.log('Submission data restored after app resume');
     } catch (error) {
-      console.error('Error recovering interrupted submission:', error);
       logError(error);
-      
+
       // Clear states on recovery failure
       setPendingSubmission(null);
       setIsSubmitting(false);
@@ -571,30 +565,26 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
-      console.log('App state changing from', appStateRef.current, 'to', nextAppState);
-      
       // If app is going to background and we're in the middle of a submission
-      if (appStateRef.current.match(/active|foreground/) && 
-          nextAppState === 'background' && 
+      if (appStateRef.current.match(/active|foreground/) &&
+          nextAppState === 'background' &&
           isSubmitting) {
-        console.log('App backgrounded during submission, preserving state');
         setPendingSubmission({
           textValue,
           medias,
         });
       }
-      
+
       // If app is coming back to foreground, check for pending submissions
-      if (appStateRef.current === 'background' && 
-          nextAppState === 'active' && 
+      if (appStateRef.current === 'background' &&
+          nextAppState === 'active' &&
           pendingSubmission) {
-        console.log('App resumed with pending submission, attempting recovery');
         // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
         }, 100); // Small delay to ensure app is fully active
       }
-      
+
       appStateRef.current = nextAppState;
     };
 
@@ -605,7 +595,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // Recovery check on component mount
   useEffect(() => {
     if (pendingSubmission && !isSubmitting) {
-      console.log('Found pending submission on mount, attempting recovery');
       recoverInterruptedSubmission();
     }
   }, []);
