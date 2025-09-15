@@ -565,10 +565,13 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
+      console.log(`[TextForageView] AppState change: ${appStateRef.current} -> ${nextAppState}, isSubmitting: ${isSubmitting}, hasPendingSubmission: ${!!pendingSubmission}`);
+
       // If app is going to background and we're in the middle of a submission
       if (appStateRef.current.match(/active|foreground/) &&
           nextAppState === 'background' &&
           isSubmitting) {
+        console.log('[TextForageView] App backgrounding during submission, saving pending state');
         setPendingSubmission({
           textValue,
           medias,
@@ -579,6 +582,7 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       if (appStateRef.current === 'background' &&
           nextAppState === 'active' &&
           pendingSubmission) {
+        console.log('[TextForageView] App returning to foreground with pending submission, starting recovery');
         // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
