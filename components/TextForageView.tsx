@@ -322,69 +322,97 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
     const savedMedias = medias;
     const savedTextValue = textValue;
-    setTextValue("");
-    setMedias([]);
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
-      if (savedMedias.length) {
-        const mediaToInsert = await Promise.all(
-          savedMedias.map(
-            async ({
-              uri,
-              type,
-              assetId,
-              contentType,
-              captureTime,
-              locationData: mediaLocationData,
-            }) => {
-              const fileUri = await getFsPathForMediaResult(
-                uri,
-                type === BlockType.Image ? "jpg" : "mp4",
-                assetId
-              );
-              return {
-                createdBy: currentUser!.id,
-                content: fileUri,
-                type,
-                localAssetId: assetId || undefined,
-                contentType,
-                captureTime,
-                locationData: mediaLocationData || undefined,
-              };
-            }
-          )
-        );
-        blocksToInsert.push(...mediaToInsert);
-      }
+      // Immediate local database saves after validation
+      let textBlockId: string | undefined;
+      let mediaBlockIds: string[] = [];
 
       if (savedTextValue) {
-        // Get location only when saving text (not for media)
-        const locationData = savedTextValue
-          ? await getLocationMetadata()
-          : null;
-
-        // Save the text block immediately
+        // Save the text block immediately without waiting for metadata
         const initialBlock = {
           createdBy: currentUser!.id,
           content: savedTextValue,
           type: BlockType.Text,
           collectionsToConnect: collectionId ? [{ collectionId }] : [],
-          locationData: locationData || undefined,
         };
 
         const { blockId } = await createBlocks({
           blocksToInsert: [initialBlock],
         }).then((results) => results[0]);
+        textBlockId = blockId;
+      }
 
-        // After saving, enrich with metadata asynchronously
+      // Handle media blocks - save immediately
+      if (savedMedias.length) {
+        const basicMediaBlocks = savedMedias.map(({
+          uri,
+          type,
+          assetId,
+          contentType,
+          captureTime,
+          locationData: mediaLocationData,
+        }) => ({
+          createdBy: currentUser!.id,
+          content: uri, // Use original URI temporarily
+          type,
+          localAssetId: assetId || undefined,
+          contentType,
+          captureTime,
+          locationData: mediaLocationData || undefined,
+          collectionsToConnect: collectionId ? [{ collectionId }] : [],
+        }));
+
+        const createdBlocks = await createBlocks({
+          blocksToInsert: basicMediaBlocks,
+        });
+        mediaBlockIds = createdBlocks.map(block => block.blockId);
+        
+        // Process file paths asynchronously and update blocks
+        savedMedias.forEach(async ({ uri, type, assetId }, index) => {
+          try {
+            const fileUri = await getFsPathForMediaResult(
+              uri,
+              type === BlockType.Image ? "jpg" : "mp4",
+              assetId
+            );
+            
+            await updateBlock({
+              blockId: createdBlocks[index].blockId,
+              editInfo: {
+                content: fileUri,
+              },
+            });
+          } catch (err) {
+            console.warn("Error processing media file path:", err);
+          }
+        });
+      }
+
+      // Clear UI after successful local saves
+      setTextValue("");
+      setMedias([]);
+
+      // Process metadata asynchronously after local saves and UI clearing
+      if (textBlockId) {
         Promise.all([
-          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue) : null,
+          getLocationMetadata().catch((err) => {
+            console.warn("Error getting location metadata:", err);
+            return null;
+          }),
+          isUrl(savedTextValue) ? extractDataFromUrl(savedTextValue).catch((err) => {
+            console.warn("Error extracting URL data:", err);
+            return null;
+          }) : Promise.resolve(null),
         ])
-          .then(async ([urlData]) => {
-            if (!urlData) return;
-
+          .then(async ([locationData, urlData]) => {
             const updateInfo: BlockEditInfo = {};
+            
+            if (locationData) {
+              updateInfo.locationData = locationData;
+            }
+            
             if (urlData) {
               const { title, description, images, url, favicon } = urlData;
               updateInfo.type = BlockType.Link;
@@ -396,21 +424,15 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
             if (Object.keys(updateInfo).length > 0) {
               await updateBlock({
-                blockId,
+                blockId: textBlockId,
                 editInfo: updateInfo,
               });
             }
           })
           .catch((err) => {
-            // Log error but don't affect the user experience
             console.warn("Error enriching block metadata:", err);
           });
       }
-
-      await createBlocks({
-        blocksToInsert,
-        collectionId,
-      });
     } catch (err) {
       logError(err);
     }
