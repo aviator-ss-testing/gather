@@ -239,6 +239,7 @@ interface DatabaseContextProps {
   trySyncPendingArenaBlocks: () => void;
   trySyncNewArenaBlocks: () => void;
   getPendingArenaBlocks: () => any;
+  triggerBlockSync: () => void;
   selectedReviewCollection: string | null;
   setSelectedReviewCollection: (collectionId: string | null) => void;
   getExistingAssetIds: (
@@ -298,6 +299,7 @@ export const DatabaseContext = createContext<DatabaseContextProps>({
   trySyncPendingArenaBlocks: () => {},
   trySyncNewArenaBlocks: () => {},
   getPendingArenaBlocks: () => {},
+  triggerBlockSync: () => {},
   selectedReviewCollection: null,
   setSelectedReviewCollection: () => {},
   getBlocks: async (opts) => {
@@ -1582,15 +1584,6 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
     await upsertConnections(
       blockConnections.map((c) => ({ ...c, collectionId }))
     );
-
-    const collectionAddedTo = await getCollection(collectionId);
-    if (
-      !collectionAddedTo?.remoteSourceType ||
-      !collectionAddedTo?.remoteSourceInfo
-    ) {
-      return;
-    }
-    void debouncedTriggerBlockSync();
   }
 
   // TODO: change this to return Connection type
@@ -2377,6 +2370,7 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
         trySyncPendingArenaBlocks,
         getPendingArenaBlocks: getPendingArenaConnections,
         trySyncNewArenaBlocks,
+        triggerBlockSync: debouncedTriggerBlockSync,
       }}
     >
       {children}

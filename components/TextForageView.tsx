@@ -172,6 +172,7 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     getCollectionItems,
     getExistingAssetIds,
     updateBlock,
+    triggerBlockSync,
   } = useContext(DatabaseContext);
   const [recording, setRecording] = useState<undefined | Recording>();
   const { currentUser } = useContext(UserContext);
@@ -411,6 +412,9 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         blocksToInsert,
         collectionId,
       });
+
+      // Trigger arena sync after all local database operations complete
+      triggerBlockSync();
     } catch (err) {
       logError(err);
     }
