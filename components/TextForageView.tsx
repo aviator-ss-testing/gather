@@ -320,8 +320,15 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // Recovery function for interrupted submissions
   const recoverInterruptedSubmission = useCallback(async () => {
     if (!pendingSubmission) {
+      console.log('TextForageView: Recovery called but no pending submission found');
       return;
     }
+
+    console.log('TextForageView: Starting recovery for interrupted submission', {
+      textLength: pendingSubmission.textValue.length,
+      mediaCount: pendingSubmission.medias.length,
+      currentAppState: appStateRef.current
+    });
 
     try {
       // Restore form data
@@ -331,13 +338,17 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       // Clear pending state
       setPendingSubmission(null);
       setIsSubmitting(false);
+      console.log('TextForageView: Submission state set to false (recovery)');
 
+      console.log('TextForageView: Successfully recovered interrupted submission');
     } catch (error) {
+      console.error('TextForageView: Failed to recover interrupted submission', error);
       logError(error);
 
       // Clear states on recovery failure
       setPendingSubmission(null);
       setIsSubmitting(false);
+      console.log('TextForageView: Submission state set to false (recovery failure)');
     }
   }, [pendingSubmission, logError]);
 
@@ -346,14 +357,23 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       return;
     }
 
+    console.log('TextForageView: Starting submission', {
+      textLength: textValue.length,
+      mediaCount: medias.length,
+      currentAppState: appStateRef.current
+    });
+
     // Set submission flag and preserve state for app backgrounding
     setIsSubmitting(true);
+    console.log('TextForageView: Submission state set to true');
     const savedMedias = medias;
     const savedTextValue = textValue;
 
     // Clear form immediately for optimistic UI
     setTextValue("");
     setMedias([]);
+
+    console.log('TextForageView: Form cleared optimistically, processing submission');
 
     const blocksToInsert: BlockInsertInfo[] = [];
 
@@ -444,15 +464,19 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
       // Clear submission state on success
       setIsSubmitting(false);
+      console.log('TextForageView: Submission state set to false (success)');
       setPendingSubmission(null);
+      console.log('TextForageView: Submission completed successfully');
 
     } catch (err) {
+      console.error('TextForageView: Submission failed, rolling back form state', err);
       logError(err);
 
       // Rollback form state on error
       setTextValue(savedTextValue);
       setMedias(savedMedias);
       setIsSubmitting(false);
+      console.log('TextForageView: Submission state set to false (error rollback)');
       setPendingSubmission(null);
 
     }
@@ -559,11 +583,19 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
+      console.log('TextForageView: AppState changing', {
+        from: appStateRef.current,
+        to: nextAppState,
+        isSubmitting,
+        hasPendingSubmission: !!pendingSubmission,
+        formHasContent: !!(textValue || medias.length)
+      });
 
       // If app is going to background and we're in the middle of a submission
       if (appStateRef.current.match(/active|foreground/) &&
           nextAppState === 'background' &&
           isSubmitting) {
+        console.log('TextForageView: App backgrounding during submission, saving pending state');
         setPendingSubmission({
           textValue,
           medias,
@@ -574,6 +606,7 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       if (appStateRef.current === 'background' &&
           nextAppState === 'active' &&
           pendingSubmission) {
+        console.log('TextForageView: App returning to foreground with pending submission, triggering recovery');
         // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
@@ -581,6 +614,7 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       }
 
       appStateRef.current = nextAppState;
+      console.log('TextForageView: AppState transition complete', { newState: nextAppState });
     };
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
@@ -592,7 +626,14 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // Recovery check on component mount
   useEffect(() => {
     if (pendingSubmission && !isSubmitting) {
+      console.log('TextForageView: Component mounted with pending submission, triggering recovery');
       recoverInterruptedSubmission();
+    } else {
+      console.log('TextForageView: Component mounted', {
+        hasPendingSubmission: !!pendingSubmission,
+        isSubmitting,
+        currentAppState: appStateRef.current
+      });
     }
   }, []);
 
