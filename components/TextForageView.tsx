@@ -449,7 +449,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
             }
           })
           .catch((err) => {
-            // Log error but don't affect the user experience
           });
       }
 
