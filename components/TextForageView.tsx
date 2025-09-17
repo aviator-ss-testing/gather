@@ -600,7 +600,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           nextAppState === 'active' &&
           pendingSubmission) {
         console.log('TextForageView: App returning to foreground with pending submission, triggering recovery');
-        // Use recovery function to handle interrupted submissions
         setTimeout(() => {
           recoverInterruptedSubmission();
         }, 100); // Small delay to ensure app is fully active
