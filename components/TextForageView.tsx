@@ -317,7 +317,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     setMedias(medias.filter((_, i) => i !== idx));
   }
 
-  // Recovery function for interrupted submissions
   const recoverInterruptedSubmission = useCallback(async () => {
     if (!pendingSubmission) {
       return;
