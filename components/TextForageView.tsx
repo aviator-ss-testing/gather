@@ -320,7 +320,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   // Recovery function for interrupted submissions
   const recoverInterruptedSubmission = useCallback(async () => {
     if (!pendingSubmission) {
-      console.log('TextForageView: Recovery called but no pending submission found');
       return;
     }
 
