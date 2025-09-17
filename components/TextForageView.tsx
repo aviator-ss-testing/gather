@@ -615,7 +615,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     };
   }, [isSubmitting, textValue, medias, pendingSubmission, recoverInterruptedSubmission]);
 
-  // Recovery check on component mount
   useEffect(() => {
     if (pendingSubmission && !isSubmitting) {
       console.log('TextForageView: Component mounted with pending submission, triggering recovery');
