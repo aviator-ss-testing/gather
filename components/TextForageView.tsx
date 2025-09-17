@@ -574,7 +574,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     void checkExistingMedias().then(setExistingMedias);
   }, [medias]);
 
-  // AppState change listener for handling backgrounding during submissions
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
       console.log('TextForageView: AppState changing', {
