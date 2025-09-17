@@ -2,8 +2,8 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Audio } from "expo-av";
 import { Recording } from "expo-av/build/Audio";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Alert, Dimensions, Linking, Platform, ScrollView } from "react-native";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AppState, Dimensions, Linking, Platform, ScrollView } from "react-native";
 import { Spinner, XStack, YStack } from "tamagui";
 import { getFsPathForMediaResult } from "../utils/blobs";
 import { BlockSelectLimit, DatabaseContext } from "../utils/db";
@@ -84,7 +84,6 @@ const getLocationMetadata = async (
       country: location.country || undefined,
     };
   } catch (error) {
-    console.warn("Error getting location metadata:", error);
     return { latitude, longitude };
   }
 };
@@ -103,7 +102,6 @@ const getCurrentLocationMetadata = async (): Promise<
 
     return await getLocationMetadata(latitude, longitude);
   } catch (error) {
-    console.warn("Error getting current location:", error);
     return undefined;
   }
 };
@@ -165,6 +163,12 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   const [textValue, setTextValue] = useState("");
   const [medias, setMedias] = useState<PickedMedia[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingSubmission, setPendingSubmission] = useState<{
+    textValue: string;
+    medias: PickedMedia[];
+  } | null>(null);
+  const appStateRef = useRef(AppState.currentState);
   const {
     createBlocks,
     shareIntent,
@@ -212,7 +216,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   const fetchPlaceholders = useCallback(async () => {
     const promptCollection = getAppSetting(AppSettingType.PromptsCollection);
     if (promptCollection) {
-      console.log("promptCollection", promptCollection);
       const collectionItems = await getCollectionItems(promptCollection, {
         page: 0,
         whereClause: `type = '${BlockType.Text}'`,
@@ -223,7 +226,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
           ? item.content.slice(0, MaxPlaceholderLength) + "..."
           : item.content
       );
-      console.log("collectionItemsText", collectionItemsText);
       if (collectionItemsText.length) {
         return collectionItemsText;
       }
@@ -315,15 +317,42 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     setMedias(medias.filter((_, i) => i !== idx));
   }
 
+  const recoverInterruptedSubmission = useCallback(async () => {
+    if (!pendingSubmission) {
+      return;
+    }
+
+    try {
+      setTextValue(pendingSubmission.textValue);
+      setMedias(pendingSubmission.medias);
+
+      // Clear pending state
+      setPendingSubmission(null);
+      setIsSubmitting(false);
+
+    } catch (error) {
+      logError(error);
+
+      // Clear states on recovery failure
+      setPendingSubmission(null);
+      setIsSubmitting(false);
+    }
+  }, [pendingSubmission, logError]);
+
   async function onSaveResult() {
     if (!textValue && !medias.length) {
       return;
     }
 
+    // Set submission flag and preserve state for app backgrounding
+    setIsSubmitting(true);
     const savedMedias = medias;
     const savedTextValue = textValue;
+
+    // Clear form immediately for optimistic UI
     setTextValue("");
     setMedias([]);
+
     const blocksToInsert: BlockInsertInfo[] = [];
 
     try {
@@ -402,8 +431,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
             }
           })
           .catch((err) => {
-            // Log error but don't affect the user experience
-            console.warn("Error enriching block metadata:", err);
           });
       }
 
@@ -411,34 +438,41 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         blocksToInsert,
         collectionId,
       });
+
+      setIsSubmitting(false);
+      setPendingSubmission(null);
+
     } catch (err) {
       logError(err);
+
+      // Rollback form state on error
+      setTextValue(savedTextValue);
+      setMedias(savedMedias);
+      setIsSubmitting(false);
+      setPendingSubmission(null);
+
     }
   }
 
   // TODO: fix this to actually pick up the sound
   async function startRecording() {
     try {
-      console.log("Requesting permissions..");
       await Audio.requestPermissionsAsync();
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      console.log("Starting recording..");
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(recording);
-      console.log("Recording started");
     } catch (err) {
       logError("Failed to start recording");
     }
   }
 
   async function stopRecording() {
-    console.log("Stopping recording..");
     if (!recording) {
       return;
     }
@@ -517,6 +551,41 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
   useEffect(() => {
     void checkExistingMedias().then(setExistingMedias);
   }, [medias]);
+
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      if (appStateRef.current.match(/active|foreground/) &&
+          nextAppState === 'background' &&
+          isSubmitting) {
+        setPendingSubmission({
+          textValue,
+          medias,
+        });
+      }
+
+      // If app is coming back to foreground, check for pending submissions
+      if (appStateRef.current === 'background' &&
+          nextAppState === 'active' &&
+          pendingSubmission) {
+        setTimeout(() => {
+          recoverInterruptedSubmission();
+        }, 100); // Small delay to ensure app is fully active
+      }
+
+      appStateRef.current = nextAppState;
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription?.remove();
+    };
+  }, [isSubmitting, textValue, medias, pendingSubmission, recoverInterruptedSubmission]);
+
+  useEffect(() => {
+    if (pendingSubmission && !isSubmitting) {
+      recoverInterruptedSubmission();
+    }
+  }, []);
 
   if (!currentUser) {
     return null;
