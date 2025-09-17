@@ -458,7 +458,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
         collectionId,
       });
 
-      // Clear submission state on success
       setIsSubmitting(false);
       console.log('TextForageView: Submission state set to false (success)');
       setPendingSubmission(null);
