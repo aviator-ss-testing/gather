@@ -554,7 +554,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
 
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
-      // If app is going to background and we're in the middle of a submission
       if (appStateRef.current.match(/active|foreground/) &&
           nextAppState === 'background' &&
           isSubmitting) {
