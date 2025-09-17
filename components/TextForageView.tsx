@@ -330,7 +330,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
     });
 
     try {
-      // Restore form data
       setTextValue(pendingSubmission.textValue);
       setMedias(pendingSubmission.medias);
 
@@ -339,7 +338,6 @@ function TextForageViewContent({ collectionId }: { collectionId?: string }) {
       setIsSubmitting(false);
       console.log('TextForageView: Submission state set to false (recovery)');
 
-      console.log('TextForageView: Successfully recovered interrupted submission');
     } catch (error) {
       console.error('TextForageView: Failed to recover interrupted submission', error);
       logError(error);
