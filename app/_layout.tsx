@@ -21,6 +21,7 @@ import { useFonts } from "expo-font";
 import { SplashScreen, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useContext, useEffect } from "react";
+import * as Linking from "expo-linking";
 import {
   InteractionManager,
   Keyboard,
@@ -38,6 +39,7 @@ import useShareIntent from "../hooks/useShareIntent";
 import { config } from "../tamagui.config";
 import { DatabaseContext, DatabaseProvider } from "../utils/db";
 import { UserProvider } from "../utils/user";
+import { parseGatherUrlScheme } from "../utils/urlScheme";
 import { ErrorsProvider } from "../utils/errors";
 import { useMilestoneCheck } from "../utils/celebrations";
 
@@ -152,7 +154,7 @@ const ParentStackComponent = Platform.OS === "android" ? JsStack : Stack;
 
 function RootLayoutNav() {
   const { shareIntent, resetShareIntent } = useShareIntent();
-  const { setShareIntent } = useContext(DatabaseContext);
+  const { setShareIntent, setCaptureIntent } = useContext(DatabaseContext);
 
   useEffect(() => {
     if (shareIntent !== null) {
@@ -160,6 +162,28 @@ function RootLayoutNav() {
       resetShareIntent();
     }
   }, [shareIntent]);
+
+  useEffect(() => {
+    const handleUrl = ({ url }: { url: string }) => {
+      const params = parseGatherUrlScheme(url);
+      if (params) {
+        setCaptureIntent(params);
+      }
+    };
+
+    const subscription = Linking.addEventListener("url", handleUrl);
+
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleUrl({ url });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [setCaptureIntent]);
+
   useMilestoneCheck();
 
   return (

@@ -32,6 +32,7 @@ import {
 } from "react";
 import { useDebounce, useDebounceValue } from "tamagui";
 import { ShareIntent } from "../hooks/useShareIntent";
+import { GatherUrlSchemeParams } from "./urlScheme";
 import {
   ArenaChannelInfo,
   createBlock as createBlockArena,
@@ -42,6 +43,13 @@ import {
   removePendingBlockUpdate,
   updateArenaBlock,
 } from "./arena";
+
+export interface CaptureIntent {
+  text?: string;
+  collectionId?: string;
+  title?: string;
+  source?: string;
+}
 import {
   CollectionToReviewKey,
   getLastSyncedInfoForChannel,
@@ -227,6 +235,10 @@ interface DatabaseContextProps {
   setShareIntent: (intent: ShareIntent | null) => void;
   shareIntent: ShareIntent | null;
 
+  // capture intent
+  setCaptureIntent: (intent: CaptureIntent | null) => void;
+  captureIntent: CaptureIntent | null;
+
   // arena
   tryImportArenaChannel: (
     arenaChannel: string | ArenaChannelInfo,
@@ -288,6 +300,9 @@ export const DatabaseContext = createContext<DatabaseContextProps>({
 
   setShareIntent: () => {},
   shareIntent: null,
+
+  setCaptureIntent: () => {},
+  captureIntent: null,
 
   tryImportArenaChannel: async () => {
     throw new Error("not yet loaded");
@@ -2260,6 +2275,7 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
   }
 
   const [shareIntent, setShareIntent] = useState<ShareIntent | null>(null);
+  const [captureIntent, setCaptureIntent] = useState<CaptureIntent | null>(null);
 
   async function tryImportArenaChannel(
     arenaChannel: string | ArenaChannelInfo,
@@ -2351,6 +2367,8 @@ export function DatabaseProvider({ children }: PropsWithChildren<{}>) {
         deleteBlock,
         setShareIntent,
         shareIntent,
+        setCaptureIntent,
+        captureIntent,
         getConnectionsForBlock,
         createCollection,
         updateCollection,
