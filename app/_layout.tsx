@@ -275,6 +275,13 @@ function RootLayoutNav() {
         }}
       />
       <Stack.Screen
+        name="capture"
+        options={{
+          presentation: "card",
+          title: "Quick Capture",
+        }}
+      />
+      <Stack.Screen
         name="collection/[id]/index"
         options={{
           presentation: "card",
